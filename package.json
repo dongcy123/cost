@@ -1,0 +1,9 @@
+{
+  "name": "icost",
+  "private": true,
+  "scripts": {
+    "build": "cd by_figma && npm install && npm run build",
+    "start": "cd server && npm start",
+    "migrate": "cd server && npm run migrate"
+  }
+}
