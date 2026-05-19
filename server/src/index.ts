@@ -27,7 +27,7 @@ if (isProduction) {
   const distPath = path.resolve(import.meta.dirname, "../../by_figma/dist");
   app.use(express.static(distPath));
   // SPA fallback — all non-API routes serve index.html
-  app.get("*", (_req, res) => {
+  app.get("/*splat", (_req, res) => {
     res.sendFile(path.join(distPath, "index.html"));
   });
 }

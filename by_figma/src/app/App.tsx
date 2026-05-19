@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
-import { Camera } from "lucide-react";
+import { Camera, Pencil } from "lucide-react";
 import { MainDashboard } from "./components/MainDashboard";
 import { UploadOverlay } from "./components/UploadOverlay";
-import { ChartsView } from "./components/ChartsView";
 import { OKRDrawer } from "./components/OKRDrawer";
 import { TransactionEditCard } from "./components/TransactionEditCard";
+import { BatchReview } from "./components/BatchReview";
+import { ManualEntryCard } from "./components/ManualEntryCard";
+import type { ParsedReceiptDTO } from "../api/client";
 import {
   Transaction,
   Budget,
@@ -15,6 +17,7 @@ import {
   fetchBudget,
   updateBudget,
   parseReceipt,
+  parseReceipts,
 } from "../api/client";
 
 export default function App() {
@@ -30,7 +33,6 @@ export default function App() {
   >("idle");
   const [uploadError, setUploadError] = useState("");
 
-  const [showCharts, setShowCharts] = useState(false);
   const [showOKRDrawer, setShowOKRDrawer] = useState(false);
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -39,6 +41,14 @@ export default function App() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+
+  // ── Batch review state ──
+  const [batchResults, setBatchResults] = useState<ParsedReceiptDTO[]>([]);
+  const [batchErrors, setBatchErrors] = useState<string[]>([]);
+  const [showBatchReview, setShowBatchReview] = useState(false);
+
+  // ── Manual entry state ──
+  const [showManualEntry, setShowManualEntry] = useState(false);
 
   // ── Data loading ──
 
@@ -74,47 +84,64 @@ export default function App() {
     });
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
     setIsUploading(true);
     setUploadStatus("uploading");
     setUploadError("");
-    setUploadProgress(0);
-
-    // Simulate upload progress
-    const progressInterval = setInterval(() => {
-      setUploadProgress((prev) => Math.min(prev + 15, 60));
-    }, 200);
+    setUploadProgress(10);
 
     try {
-      const base64 = await fileToBase64(file);
-      setUploadProgress(70);
+      // Convert all files to base64
+      const total = files.length;
+      const images: string[] = [];
+
+      for (let i = 0; i < total; i++) {
+        images.push(await fileToBase64(files[i]));
+        setUploadProgress(10 + Math.round((i / total) * 20));
+      }
+
       setUploadStatus("parsing");
+      setUploadProgress(40);
 
-      // Backend: Baidu OCR → DeepSeek LLM
-      const result = await parseReceipt(base64);
+      let result;
+      if (images.length === 1) {
+        result = await parseReceipt(images[0]);
+      } else {
+        result = await parseReceipts(images);
+      }
 
-      const dto = {
-        category: result.category,
-        merchant: result.merchant,
-        amount: result.amount,
-        date: result.date,
-        month: selectedMonth,
-      };
+      const { transactions: parsed, errors } = result;
 
-      const saved = await createTransaction(dto);
-      setTransactions((prev) => [saved, ...prev]);
       setUploadProgress(100);
-      setUploadStatus("success");
 
-      setTimeout(() => {
+      if (parsed.length === 1) {
+        // Single result — auto-save without review
+        const t = parsed[0];
+        const saved = await createTransaction({
+          category: t.category,
+          merchant: t.merchant,
+          amount: t.amount,
+          date: t.date,
+          month: t.date.slice(0, 7),
+        });
+        setTransactions((prev) => [saved, ...prev]);
+        setUploadStatus("success");
+        setTimeout(() => {
+          setIsUploading(false);
+          setUploadStatus("idle");
+        }, 2500);
+      } else {
+        // Multiple results — open batch review
         setIsUploading(false);
         setUploadStatus("idle");
-        setUploadProgress(0);
-      }, 2500);
+        setShowBatchReview(true);
+      }
+
+      setBatchResults(parsed);
+      setBatchErrors(errors || []);
     } catch (err: any) {
-      clearInterval(progressInterval);
       setUploadStatus("error");
       setUploadError(err?.message || "识别失败，请重试");
       setTimeout(() => {
@@ -123,6 +150,50 @@ export default function App() {
         setUploadProgress(0);
         setUploadError("");
       }, 4000);
+    }
+  };
+
+  const handleBatchSave = async (items: ParsedReceiptDTO[]) => {
+    try {
+      for (const item of items) {
+        const saved = await createTransaction({
+          category: item.category,
+          merchant: item.merchant,
+          amount: item.amount,
+          date: item.date,
+          month: item.date.slice(0, 7),
+        });
+        setTransactions((prev) => [saved, ...prev]);
+      }
+      setShowBatchReview(false);
+      setBatchResults([]);
+      setBatchErrors([]);
+    } catch {
+      setLoadError("批量保存失败");
+    }
+  };
+
+  const handleBatchCancel = () => {
+    setShowBatchReview(false);
+    setBatchResults([]);
+    setBatchErrors([]);
+  };
+
+  const handleManualSave = async (data: {
+    category: string;
+    merchant: string;
+    amount: number;
+    date: string;
+  }) => {
+    try {
+      const saved = await createTransaction({
+        ...data,
+        month: data.date.slice(0, 7),
+      });
+      setTransactions((prev) => [saved, ...prev]);
+      setShowManualEntry(false);
+    } catch {
+      setLoadError("保存失败，请重试");
     }
   };
 
@@ -205,41 +276,41 @@ export default function App() {
 
       {/* Main Content */}
       <div className="relative z-10">
-        {!showCharts ? (
-          <MainDashboard
-            selectedMonth={selectedMonth}
-            setSelectedMonth={setSelectedMonth}
-            transactions={transactions}
-            onDeleteTransaction={handleDeleteTransaction}
-            onEditTransaction={handleEditTransaction}
-            onShowCharts={() => setShowCharts(true)}
-            onShowOKR={() => setShowOKRDrawer(true)}
-            budget={budget}
-            isLoading={isLoading}
-            error={loadError}
-            onRetry={() => loadData(selectedMonth)}
-          />
-        ) : (
-          <ChartsView
-            transactions={transactions}
-            selectedMonth={selectedMonth}
-            onBack={() => setShowCharts(false)}
-            onEditTransaction={handleEditTransaction}
-          />
-        )}
+        <MainDashboard
+          selectedMonth={selectedMonth}
+          setSelectedMonth={setSelectedMonth}
+          transactions={transactions}
+          onDeleteTransaction={handleDeleteTransaction}
+          onEditTransaction={handleEditTransaction}
+          onShowOKR={() => setShowOKRDrawer(true)}
+          budget={budget}
+          isLoading={isLoading}
+          error={loadError}
+          onRetry={() => loadData(selectedMonth)}
+        />
       </div>
 
       {/* FAB */}
-      {!isUploading && (
-        <label className="fixed bottom-6 right-6 w-14 h-14 bg-black dark:bg-white flex items-center justify-center cursor-pointer z-40">
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleFileSelect}
-          />
-          <Camera className="w-6 h-6 text-white dark:text-black" />
-        </label>
+      {!isUploading && !showBatchReview && !showManualEntry && (
+        <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-40">
+          <button
+            onClick={() => setShowManualEntry(true)}
+            className="w-14 h-14 bg-white dark:bg-black border border-black/20 dark:border-white/20 flex items-center justify-center"
+          >
+            <Pencil className="w-5 h-5 text-black dark:text-white" />
+          </button>
+
+          <label className="w-14 h-14 bg-black dark:bg-white flex items-center justify-center cursor-pointer">
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleFileSelect}
+            />
+            <Camera className="w-6 h-6 text-white dark:text-black" />
+          </label>
+        </div>
       )}
 
       {/* Loading FAB */}
@@ -260,6 +331,24 @@ export default function App() {
 
       {/* Upload Overlay */}
       <UploadOverlay isVisible={isUploading} status={uploadStatus} />
+
+      {/* Batch Review */}
+      {showBatchReview && (
+        <BatchReview
+          transactions={batchResults}
+          errors={batchErrors}
+          onSave={handleBatchSave}
+          onClose={handleBatchCancel}
+        />
+      )}
+
+      {/* Manual Entry */}
+      {showManualEntry && (
+        <ManualEntryCard
+          onSave={handleManualSave}
+          onClose={() => setShowManualEntry(false)}
+        />
+      )}
 
       {/* Transaction Edit Card */}
       <TransactionEditCard

@@ -114,10 +114,39 @@ export async function updateBudget(
 
 // ── Receipt Parsing ──
 
-export async function parseReceipt(imageBase64: string): Promise<ParsedReceiptDTO> {
-  const row = await request<ParsedReceiptDTO>("/transactions/parse-receipt", {
+export interface ParseReceiptResponse {
+  transactions: ParsedReceiptDTO[];
+  errors?: string[];
+}
+
+export async function parseReceipt(
+  imageBase64: string
+): Promise<ParseReceiptResponse> {
+  const row = await request<{
+    transactions: { merchant: string; amount: number | string; date: string; category: string }[];
+    errors?: string[];
+  }>("/transactions/parse-receipt", {
     method: "POST",
     body: JSON.stringify({ image: imageBase64 }),
   });
-  return { ...row, amount: Number(row.amount) };
+  return {
+    transactions: row.transactions.map((t) => ({ ...t, amount: Number(t.amount) })),
+    errors: row.errors,
+  };
+}
+
+export async function parseReceipts(
+  images: string[]
+): Promise<ParseReceiptResponse> {
+  const row = await request<{
+    transactions: { merchant: string; amount: number | string; date: string; category: string }[];
+    errors?: string[];
+  }>("/transactions/parse-receipt", {
+    method: "POST",
+    body: JSON.stringify({ images }),
+  });
+  return {
+    transactions: row.transactions.map((t) => ({ ...t, amount: Number(t.amount) })),
+    errors: row.errors,
+  };
 }

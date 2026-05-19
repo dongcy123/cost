@@ -1,59 +1,84 @@
 import { Router } from "express";
-import { baiduOCR, parseReceiptText } from "../client";
+import { baiduOCR, parseReceiptText, ParsedReceipt } from "../client";
 
 const router = Router();
 
 // POST /api/transactions/parse-receipt
+// Accepts: { image: "base64..." }  or  { images: ["base64...", ...] }
 router.post("/", async (req, res) => {
   try {
-    const { image } = req.body;
+    const { image, images } = req.body;
 
-    if (!image || typeof image !== "string") {
+    // Normalize to string[] of base64 images
+    let imageList: string[];
+
+    if (Array.isArray(images) && images.length > 0) {
+      imageList = images.map((img: string) =>
+        img.replace(/^data:image\/\w+;base64,/, "")
+      );
+    } else if (typeof image === "string") {
+      imageList = [image.replace(/^data:image\/\w+;base64,/, "")];
+    } else {
       res.status(400).json({ error: "缺少图片数据" });
       return;
     }
 
-    // Strip data URL prefix if present (e.g. "data:image/png;base64,...")
-    const base64 = image.replace(/^data:image\/\w+;base64,/, "");
-
-    // Step 1: Baidu OCR
-    let ocrText: string;
-    try {
-      ocrText = await baiduOCR(base64);
-    } catch (err: any) {
-      console.error("Baidu OCR error:", err);
-      res.status(502).json({ error: "OCR 识别服务异常，请检查百度 API 配置" });
+    if (imageList.length > 10) {
+      res.status(400).json({ error: "单次最多上传 10 张图片" });
       return;
     }
 
-    if (!ocrText || ocrText.trim().length < 3) {
+    // Step 1: OCR each image sequentially (Baidu API rate limit)
+    const ocrResults: string[] = [];
+    for (const img of imageList) {
+      try {
+        const text = await baiduOCR(img);
+        if (text && text.trim().length >= 3) {
+          ocrResults.push(text.trim());
+        }
+      } catch (err: any) {
+        console.error("Baidu OCR error on image:", err.message);
+        // Continue with remaining images
+      }
+    }
+
+    if (ocrResults.length === 0) {
       res.status(422).json({ error: "未能从图片中识别出文字，请上传清晰的截图" });
       return;
     }
 
-    // Step 2: DeepSeek LLM parsing
-    const result = await parseReceiptText(ocrText.trim());
-    res.json(result);
+    // Step 2: LLM parse each OCR result
+    const allTransactions: ParsedReceipt[] = [];
+    const errors: string[] = [];
+
+    for (let i = 0; i < ocrResults.length; i++) {
+      try {
+        const txs = await parseReceiptText(ocrResults[i]);
+        allTransactions.push(...txs);
+      } catch (err: any) {
+        if (err.message === "NOT_A_RECEIPT") {
+          // Single image not a receipt — skip silently for batch
+          if (imageList.length === 1) {
+            errors.push("未识别到有效票据");
+          }
+        } else {
+          console.error(`Parse error on image ${i}:`, err.message);
+          errors.push(`第 ${i + 1} 张图片识别失败`);
+        }
+      }
+    }
+
+    if (allTransactions.length === 0) {
+      res.status(422).json({
+        error:
+          errors.length > 0 ? errors[0] : "未识别到有效票据，请上传清晰的消费截图",
+      });
+      return;
+    }
+
+    res.json({ transactions: allTransactions, errors: errors.length > 0 ? errors : undefined });
   } catch (err: any) {
     console.error("POST /parse-receipt error:", err);
-
-    const message = err?.message || "";
-
-    if (message === "NOT_A_RECEIPT") {
-      res.status(422).json({ error: "未识别到有效票据，请上传清晰的消费截图" });
-      return;
-    }
-
-    if (message.includes("Missing required fields")) {
-      res.status(422).json({ error: "票据信息不完整，请尝试重新截取" });
-      return;
-    }
-
-    if (message.includes("JSON") || message.includes("parse")) {
-      res.status(502).json({ error: "AI 识别结果异常，请重试" });
-      return;
-    }
-
     res.status(500).json({ error: "票据识别失败，请重试" });
   }
 });

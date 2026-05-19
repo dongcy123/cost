@@ -1,11 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
-
-const anthropic = new Anthropic({
-  baseURL: process.env.ANTHROPIC_BASE_URL || "https://api.deepseek.com/anthropic",
-  apiKey: process.env.ANTHROPIC_AUTH_TOKEN || "sk-xxx",
-});
-
-const MODEL = process.env.ANTHROPIC_MODEL || "deepseek-v4-pro[1m]";
+const MODEL = process.env.ANTHROPIC_PARSING_MODEL || "deepseek-v4-flash";
 
 // ── Baidu OCR ──
 
@@ -36,15 +29,14 @@ async function getBaiduAccessToken(): Promise<string> {
   return cachedToken.token;
 }
 
-export async function baiduOCR(base64Image: string): Promise<string> {
-  const token = await getBaiduAccessToken();
-
+async function baiduOCROnce(base64Image: string, token: string): Promise<string> {
   const res = await fetch(
     `https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token=${token}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: `image=${encodeURIComponent(base64Image)}&language_type=CHN_ENG`,
+      signal: AbortSignal.timeout(15000),
     }
   );
 
@@ -61,40 +53,63 @@ export async function baiduOCR(base64Image: string): Promise<string> {
   return texts.join("\n");
 }
 
-// ── DeepSeek LLM ──
+export async function baiduOCR(base64Image: string): Promise<string> {
+  const token = await getBaiduAccessToken();
 
-const PARSE_PROMPT = `你是一个记账助手。下面是从用户上传的消费截图/支付凭证中 OCR 提取的文字。
+  // Retry up to 2 times for transient network errors
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await baiduOCROnce(base64Image, token);
+    } catch (err: any) {
+      if (attempt === 1) throw err;
+      if (err.message?.includes("fetch failed") || err.name === "TimeoutError") {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
 
-请从这些文字中提取关键信息，严格返回 JSON 格式（不要有其他文字）：
-
-{
-  "merchant": "商户名称",
-  "amount": 金额数字,
-  "date": "YYYY-MM-DD HH:mm:ss",
-  "category": "类别"
+  throw new Error("Baidu OCR unreachable");
 }
 
-规则：
-- amount: 只提取实付金额数字，忽略货币符号。如文字中有"实付45.50"则返回45.50；若有多个金额，取实际支付的那个
-- merchant: 提取收款方/商户名，如"星巴克""滴滴出行""美团外卖"等。不要包含"省""市""路"等地址信息
-- date: 优先取交易时间/支付时间，其次取单据打印时间。找不到具体时间则用今天的日期，时间用当前时间
-- category: 根据商户类型推断，必须是以下之一：餐饮、交通、购物、娱乐、医疗、教育、住房、其他
-- 如果 OCR 文字中没有消费者/支付相关信息，返回 {"error": "NOT_A_RECEIPT"}
-- 每个分类的判断标准：
-  餐饮：餐厅/外卖/咖啡/茶饮/小吃/火锅/炸鸡/披萨
-  交通：打车/加油/地铁/公交/航班/火车
-  购物：超市/电商/淘宝/京东/拼多多/百货/服装/便利店/屈臣氏
-  娱乐：电影/KTV/会员/游戏/视频/音乐/旅游/景点
-  医疗：药房/医院/诊所/体检
-  教育：课程/书本/培训/学费
-  住房：房租/物业/水电/燃气
+// ── DeepSeek LLM ──
+
+function buildPrompt(ocrText: string): string {
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")} ${String(today.getHours()).padStart(2, "0")}:${String(today.getMinutes()).padStart(2, "0")}:${String(today.getSeconds()).padStart(2, "0")}`;
+
+  return `你是一个记账助手。下面是从用户上传的消费记录截图/支付凭证中 OCR 提取的文字。
+
+今天的日期是 ${todayStr}。所有日期必须基于此日期，年份必须是 ${today.getFullYear()}。
+
+请从文字中提取消费信息，严格返回 JSON 格式（不要有其他文字）：
+
+{
+  "transactions": [
+    { "merchant": "商户名", "amount": 金额, "date": "YYYY-MM-DD HH:mm:ss", "category": "分类" }
+  ]
+}
+
+核心规则：
+- 如果截图中有多条独立消费记录（如银行扣款列表、多条支付记录、表格形式的账单），返回多条
+- 对于含有同类多件商品的超市小票（如3件零食），同类商品合并为一条，取汇总金额
+- 不同类的商品（零食 vs 日用品）拆为不同记录
+- amount: 只提取实付金额数字，忽略货币符号。如"实付45.50"则返回45.50
+- merchant: 提取收款方/商户名，不要包含地址信息。表格中出现多条不同商户时，每条取对应的商户
+- date: 优先取交易/支付时间。OCR 文字中只出现月日没有年份时，年份统一用 ${today.getFullYear()}。找不到具体时间则用今天的日期和时间
+- category: 必须是以下之一：餐饮、交通、购物、娱乐、医疗、教育、住房、其他
+- 类别判断：餐厅/外卖/咖啡/茶饮 → 餐饮 | 打车/加油/地铁 → 交通 | 超市/电商/百货 → 购物 | 电影/KTV/会员/游戏 → 娱乐 | 药房/医院 → 医疗 | 课程/培训 → 教育 | 房租/水电/物业 → 住房
+- 如果 OCR 文字中没有消费/支付信息，返回 {"error": "NOT_A_RECEIPT"}
+- 金额含逗号或空格分隔的数字（如"1,234.56"），去除逗号后作为数字
 
 以下是 OCR 提取的文字：
 ---
-{ocrText}
+${ocrText}
 ---
 
 只返回纯 JSON：`;
+}
 
 export interface ParsedReceipt {
   merchant: string;
@@ -107,44 +122,124 @@ interface ParseError {
   error: string;
 }
 
-export async function parseReceiptText(ocrText: string): Promise<ParsedReceipt> {
-  const message = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 500,
-    messages: [
-      {
-        role: "user",
-        content: PARSE_PROMPT.replace("{ocrText}", ocrText),
-      },
-    ],
-  });
+interface ParseResult {
+  transactions: ParsedReceipt[];
+}
+export interface ParsedReceipt {
+  merchant: string;
+  amount: number;
+  date: string;
+  category: string;
+}
 
-  const textBlock = message.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text in response");
+interface ParseError {
+  error: string;
+}
+
+interface ParseResult {
+  transactions: ParsedReceipt[];
+}
+
+export async function parseReceiptText(ocrText: string): Promise<ParsedReceipt[]> {
+  // Sanitize: strip control chars and non-printable characters that break API requests
+  let text = ocrText
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // strip control chars except \n \t
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+
+  if (!text || text.length < 3) {
+    throw new Error("NOT_A_RECEIPT");
   }
 
-  const jsonText = textBlock.text.trim();
-
-  let parsed: ParsedReceipt | ParseError;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    const match = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (match) {
-      parsed = JSON.parse(match[1].trim());
-    } else {
-      throw new Error("Failed to parse AI response as JSON");
+  // Truncate very long OCR text to avoid API connection issues.
+  if (text.length > 800) {
+    const lines = text.split("\n");
+    // Keep lines that contain numbers, amounts, or merchant indicators
+    const relevant = lines.filter(
+      (l) => /[\d]/.test(l) && (l.includes("¥") || l.includes("￥") || l.includes("元") || l.includes("支出") || l.includes("消费") || l.includes("支付") || l.includes("扣款") || l.length > 10)
+    );
+    if (relevant.length > 0) {
+      text = relevant.join("\n");
+    }
+    // Still too long? Just keep first 1500 chars
+    if (text.length > 1500) {
+      text = text.substring(0, 1500);
     }
   }
 
-  if ("error" in parsed) {
-    throw new Error(parsed.error);
+  async function attempt(): Promise<ParsedReceipt[]> {
+    const baseURL = process.env.ANTHROPIC_BASE_URL || "https://api.deepseek.com/anthropic";
+    const apiKey = process.env.ANTHROPIC_AUTH_TOKEN || "";
+
+    const res = await fetch(`${baseURL}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 8000,
+        messages: [{ role: "user", content: buildPrompt(text) }],
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`API ${res.status}: ${errText.slice(0, 200)}`);
+    }
+
+    const message = (await res.json()) as {
+      content?: { type: string; text?: string }[];
+    };
+
+    const textBlock = (message.content || []).find((b) => b.type === "text");
+    if (!textBlock?.text) {
+      throw new Error("No text in response");
+    }
+
+    const jsonText = textBlock.text.trim();
+
+    let parsed: ParseResult | ParseError;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      const match = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (match) {
+        parsed = JSON.parse(match[1].trim());
+      } else {
+        throw new Error("Failed to parse AI response as JSON");
+      }
+    }
+
+    if ("error" in parsed) {
+      throw new Error(parsed.error);
+    }
+
+    const txs = (parsed as ParseResult).transactions;
+    if (!txs || txs.length === 0) {
+      throw new Error("Missing required fields in AI response");
+    }
+
+    for (const t of txs) {
+      if (!t.merchant || !t.amount) {
+        throw new Error("Missing required fields in AI response");
+      }
+    }
+
+    return txs;
   }
 
-  if (!parsed.merchant || !parsed.amount) {
-    throw new Error("Missing required fields in AI response");
+  try {
+    return await attempt();
+  } catch (err: any) {
+    // If the request was terminated (likely too much text), retry with truncated text
+    if (err.message === "terminated" && text.length > 400) {
+      text = text.split("\n").slice(0, 10).join("\n").substring(0, 500);
+      return await attempt();
+    }
+    throw err;
   }
-
-  return parsed;
 }

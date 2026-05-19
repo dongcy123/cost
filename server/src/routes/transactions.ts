@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, transactions } from "../db";
-import { asc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 
 const router = Router();
@@ -24,12 +24,12 @@ router.get("/", async (req, res) => {
         .select()
         .from(transactions)
         .where(eq(transactions.month, month))
-        .orderBy(asc(transactions.date));
+        .orderBy(desc(transactions.date));
     } else {
       rows = await db
         .select()
         .from(transactions)
-        .orderBy(asc(transactions.date));
+        .orderBy(desc(transactions.date));
     }
 
     res.json(rows);
