@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: icost-api
+    env: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: NODE_ENV=production npx tsx src/index.ts
+    envVars:
+      - key: PORT
+        value: "3001"
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_BASE_URL
+        sync: false
+      - key: ANTHROPIC_AUTH_TOKEN
+        sync: false
+      - key: ANTHROPIC_MODEL
+        sync: false
+      - key: ANTHROPIC_PARSING_MODEL
+        sync: false
+      - key: BAIDU_API_KEY
+        sync: false
+      - key: BAIDU_SECRET_KEY
+        sync: false

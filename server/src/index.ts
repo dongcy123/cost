@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
+import { fileURLToPath } from "url";
 import cors from "cors";
 import transactionRoutes from "./routes/transactions";
 import budgetRoutes from "./routes/budget";
@@ -24,7 +25,8 @@ app.get("/api/health", (_req, res) => {
 
 // In production, serve the built frontend
 if (isProduction) {
-  const distPath = path.resolve(import.meta.dirname, "../../by_figma/dist");
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const distPath = path.resolve(__dirname, "../../by_figma/dist");
   app.use(express.static(distPath));
   // SPA fallback — all non-API routes serve index.html
   app.get("/*splat", (_req, res) => {
