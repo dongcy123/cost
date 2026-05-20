@@ -6,6 +6,7 @@ import { OKRDrawer } from "./components/OKRDrawer";
 import { TransactionEditCard } from "./components/TransactionEditCard";
 import { BatchReview } from "./components/BatchReview";
 import { ManualEntryCard } from "./components/ManualEntryCard";
+import { LoginScreen } from "./components/LoginScreen";
 import type { ParsedReceiptDTO } from "../api/client";
 import {
   Transaction,
@@ -18,9 +19,32 @@ import {
   updateBudget,
   parseReceipt,
   parseReceipts,
+  getAuthToken,
+  verifyToken,
+  clearAuthToken,
 } from "../api/client";
 
 export default function App() {
+  const [authState, setAuthState] = useState<"loading" | "authenticated" | "unauthenticated">("loading");
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = getAuthToken();
+      if (!token) {
+        setAuthState("unauthenticated");
+        return;
+      }
+      const valid = await verifyToken();
+      if (valid) {
+        setAuthState("authenticated");
+      } else {
+        clearAuthToken();
+        setAuthState("unauthenticated");
+      }
+    };
+    checkAuth();
+  }, []);
+
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -70,8 +94,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (authState !== "authenticated") return;
     loadData(selectedMonth);
-  }, [selectedMonth, loadData]);
+  }, [selectedMonth, loadData, authState]);
 
   // ── Upload ──
 
@@ -244,6 +269,18 @@ export default function App() {
   // ── Helpers ──
 
   const dismissError = () => setLoadError("");
+
+  if (authState === "loading") {
+    return (
+      <div className="w-full min-h-screen bg-black flex items-center justify-center">
+        <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (authState === "unauthenticated") {
+    return <LoginScreen onAuthenticated={() => setAuthState("authenticated")} />;
+  }
 
   return (
     <div className="w-full min-h-screen bg-white dark:bg-black text-black dark:text-white relative overflow-hidden">

@@ -1,4 +1,17 @@
 const BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+const AUTH_TOKEN_KEY = "icost_auth_token";
+
+export function getAuthToken(): string | null {
+  return sessionStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+export function setAuthToken(token: string): void {
+  sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+export function clearAuthToken(): void {
+  sessionStorage.removeItem(AUTH_TOKEN_KEY);
+}
 
 export interface Transaction {
   id: number;
@@ -35,6 +48,35 @@ export interface Budget {
 
 export type UpdateBudgetDTO = Omit<Budget, "month">;
 
+// ── Auth ──
+
+export async function verifyToken(): Promise<boolean> {
+  try {
+    await request<{ valid: boolean }>("/auth/verify");
+    return true;
+  } catch {
+    clearAuthToken();
+    return false;
+  }
+}
+
+export async function verifyPassword(password: string): Promise<boolean> {
+  const res = await fetch(`${BASE}/auth/verify`, {
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${password}`,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: "密码错误" }));
+    throw new Error(body.error || "密码错误");
+  }
+
+  const data = await res.json();
+  return data.valid === true;
+}
+
 class ApiError extends Error {
   status: number;
   code: string;
@@ -48,10 +90,27 @@ class ApiError extends Error {
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+
+  if (options?.body) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${BASE}${url}`, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: { ...headers, ...(options?.headers as Record<string, string>) },
   });
+
+  if (res.status === 401) {
+    clearAuthToken();
+    window.location.reload();
+    throw new Error("未授权访问");
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: "请求失败" }));

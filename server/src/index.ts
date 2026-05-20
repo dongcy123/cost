@@ -6,6 +6,7 @@ import cors from "cors";
 import transactionRoutes from "./routes/transactions";
 import budgetRoutes from "./routes/budget";
 import parseReceiptRoutes from "./routes/parse-receipt";
+import authRoutes from "./routes/auth";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -18,7 +19,27 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "20mb" }));
 
+// Auth middleware — checks Bearer token against ACCESS_PASSWORD
+app.use("/api", (req, res, next) => {
+  const password = process.env.ACCESS_PASSWORD;
+  if (!password) return next();
+  if (req.path === "/health" || req.path === "/auth/verify") return next();
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "未授权访问" });
+  }
+
+  const token = authHeader.slice(7);
+  if (token !== password) {
+    return res.status(401).json({ error: "密码错误" });
+  }
+
+  next();
+});
+
 // API Routes
+app.use("/api/auth", authRoutes);
 app.use("/api/transactions", transactionRoutes);
 app.use("/api/budget", budgetRoutes);
 app.use("/api/transactions/parse-receipt", parseReceiptRoutes);
