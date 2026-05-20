@@ -1,5 +1,6 @@
 node_modules/
 dist/
+!by_figma/dist/
 .env
 *.log
 .DS_Store

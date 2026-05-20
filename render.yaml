@@ -2,7 +2,7 @@ services:
   - type: web
     name: icost-api
     env: node
-    buildCommand: cd by_figma && npm install && npm run build && cd ../server && npm install
+    buildCommand: cd server && npm install
     startCommand: cd server && npm start
     envVars:
       - key: PORT
