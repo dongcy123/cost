@@ -3,7 +3,7 @@ services:
     name: icost-api
     env: node
     buildCommand: cd server && npm install
-    startCommand: cd server && npm start
+    startCommand: cd server && npm run migrate && npm start
     envVars:
       - key: PORT
         value: "3001"
