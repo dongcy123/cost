@@ -34,3 +34,9 @@ export const budgets = pgTable(
   },
   (table) => [uniqueIndex("budgets_month_idx").on(table.month)]
 );
+
+// ── Categories ──
+export const categories = pgTable("categories", {
+  name: text("name").primaryKey(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).defaultNow(),
+});

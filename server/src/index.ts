@@ -7,6 +7,7 @@ import transactionRoutes from "./routes/transactions";
 import budgetRoutes from "./routes/budget";
 import parseReceiptRoutes from "./routes/parse-receipt";
 import authRoutes from "./routes/auth";
+import categoryRoutes from "./routes/categories";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -40,6 +41,7 @@ app.use("/api", (req, res, next) => {
 
 // API Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/categories", categoryRoutes);
 app.use("/api/transactions", transactionRoutes);
 app.use("/api/budget", budgetRoutes);
 app.use("/api/transactions/parse-receipt", parseReceiptRoutes);

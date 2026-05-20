@@ -1,7 +1,6 @@
-import { useState } from "react";
-import { X } from "lucide-react";
-
-const CATEGORIES = ["餐饮", "交通", "购物", "娱乐", "医疗", "教育", "住房", "其他"];
+import { useState, useEffect } from "react";
+import { X, Plus } from "lucide-react";
+import { fetchCategories, createCategory } from "../../api/client";
 
 interface ManualEntryCardProps {
   onSave: (data: {
@@ -17,10 +16,18 @@ export function ManualEntryCard({ onSave, onClose }: ManualEntryCardProps) {
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
+  const [categories, setCategories] = useState<string[]>([]);
   const [category, setCategory] = useState("餐饮");
   const [merchant, setMerchant] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayStr);
+  const [isAdding, setIsAdding] = useState(false);
+  const [newCategory, setNewCategory] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    fetchCategories().then(setCategories).catch(() => {});
+  }, []);
 
   const handleSave = () => {
     const numAmount = parseFloat(amount);
@@ -32,6 +39,23 @@ export function ManualEntryCard({ onSave, onClose }: ManualEntryCardProps) {
       amount: numAmount,
       date: date + ":00",
     });
+  };
+
+  const handleAddCategory = async () => {
+    const name = newCategory.trim();
+    if (!name) return;
+    setIsSaving(true);
+    try {
+      await createCategory(name);
+      setCategories((prev) => [...prev, name].sort());
+      setCategory(name);
+      setNewCategory("");
+      setIsAdding(false);
+    } catch {
+      // ignore
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const isValid = merchant.trim() && parseFloat(amount) > 0;
@@ -58,7 +82,7 @@ export function ManualEntryCard({ onSave, onClose }: ManualEntryCardProps) {
             <div>
               <label className="block text-sm text-[#8E8E93] mb-2">分类</label>
               <div className="flex flex-wrap gap-2">
-                {CATEGORIES.map((c) => (
+                {categories.map((c) => (
                   <button
                     key={c}
                     onClick={() => setCategory(c)}
@@ -71,6 +95,38 @@ export function ManualEntryCard({ onSave, onClose }: ManualEntryCardProps) {
                     {c}
                   </button>
                 ))}
+                {isAdding ? (
+                  <div className="flex gap-1 items-center">
+                    <input
+                      type="text"
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                      placeholder="新分类名"
+                      maxLength={20}
+                      autoFocus
+                      className="w-20 px-2 py-1 text-sm bg-transparent border-b border-black/20 dark:border-white/20 outline-none"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleAddCategory();
+                        if (e.key === "Escape") setIsAdding(false);
+                      }}
+                    />
+                    <button
+                      onClick={handleAddCategory}
+                      disabled={!newCategory.trim() || isSaving}
+                      className="text-xs text-black dark:text-white disabled:opacity-30"
+                    >
+                      确定
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setIsAdding(true)}
+                    className="px-3 py-1.5 text-sm bg-transparent border border-dashed border-black/20 dark:border-white/30 text-black dark:text-white"
+                  >
+                    <Plus className="w-3 h-3 inline mr-1" />
+                    新增
+                  </button>
+                )}
               </div>
             </div>
 

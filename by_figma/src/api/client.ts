@@ -209,3 +209,16 @@ export async function parseReceipts(
     errors: row.errors,
   };
 }
+
+// ── Categories ──
+
+export async function fetchCategories(): Promise<string[]> {
+  return request<string[]>("/categories");
+}
+
+export async function createCategory(name: string): Promise<void> {
+  await request<{ name: string }>("/categories", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}

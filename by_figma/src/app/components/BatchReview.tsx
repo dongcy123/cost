@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, ChevronDown } from "lucide-react";
 import type { ParsedReceiptDTO } from "../../api/client";
-
-const CATEGORIES = ["餐饮", "交通", "购物", "娱乐", "医疗", "教育", "住房", "其他"];
+import { fetchCategories } from "../../api/client";
 
 interface BatchItem extends ParsedReceiptDTO {
   _id: number;
@@ -17,9 +16,14 @@ interface BatchReviewProps {
 }
 
 export function BatchReview({ transactions, errors, onSave, onClose }: BatchReviewProps) {
+  const [categories, setCategories] = useState<string[]>(["餐饮", "交通", "购物", "娱乐", "医疗", "教育", "住房", "其他"]);
   const [items, setItems] = useState<BatchItem[]>(
     transactions.map((t, i) => ({ ...t, _id: i, selected: true }))
   );
+
+  useEffect(() => {
+    fetchCategories().then(setCategories).catch(() => {});
+  }, []);
 
   const toggleItem = (id: number) => {
     setItems((prev) =>
@@ -120,7 +124,7 @@ export function BatchReview({ transactions, errors, onSave, onClose }: BatchRevi
                           onChange={(e) => updateItem(item._id, "category", e.target.value)}
                           className="w-full bg-transparent border-b border-black/20 dark:border-white/20 py-1 text-sm outline-none appearance-none"
                         >
-                          {CATEGORIES.map((c) => (
+                          {categories.map((c) => (
                             <option key={c} value={c}>
                               {c}
                             </option>

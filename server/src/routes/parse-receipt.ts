@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { baiduOCR, parseReceiptText, ParsedReceipt } from "../client";
+import { db, categories } from "../db";
 
 const router = Router();
 
@@ -28,6 +29,15 @@ router.post("/", async (req, res) => {
       return;
     }
 
+    // Fetch custom categories for LLM prompt
+    let categoryList: string[] = [];
+    try {
+      const rows = await db.select({ name: categories.name }).from(categories);
+      categoryList = rows.map((r) => r.name);
+    } catch {
+      // fallback to defaults
+    }
+
     // Step 1: OCR each image sequentially (Baidu API rate limit)
     const ocrResults: string[] = [];
     for (const img of imageList) {
@@ -38,7 +48,6 @@ router.post("/", async (req, res) => {
         }
       } catch (err: any) {
         console.error("Baidu OCR error on image:", err.message);
-        // Continue with remaining images
       }
     }
 
@@ -53,11 +62,10 @@ router.post("/", async (req, res) => {
 
     for (let i = 0; i < ocrResults.length; i++) {
       try {
-        const txs = await parseReceiptText(ocrResults[i]);
+        const txs = await parseReceiptText(ocrResults[i], categoryList);
         allTransactions.push(...txs);
       } catch (err: any) {
         if (err.message === "NOT_A_RECEIPT") {
-          // Single image not a receipt — skip silently for batch
           if (imageList.length === 1) {
             errors.push("未识别到有效票据");
           }

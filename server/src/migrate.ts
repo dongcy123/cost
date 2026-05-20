@@ -36,6 +36,19 @@ async function migrate() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_transactions_month ON transactions(month)`;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS categories (
+      name TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    INSERT INTO categories (name)
+    VALUES ('餐饮'), ('交通'), ('购物'), ('娱乐'), ('医疗'), ('教育'), ('住房'), ('其他')
+    ON CONFLICT (name) DO NOTHING
+  `;
+
   console.log("Migration complete.");
   process.exit(0);
 }
