@@ -3,8 +3,8 @@ services:
     name: icost-api
     env: node
     rootDir: server
-    buildCommand: npm install --include=dev
-    startCommand: NODE_ENV=production node ./node_modules/.bin/tsx src/index.ts
+    buildCommand: npm install
+    startCommand: npm start
     envVars:
       - key: PORT
         value: "3001"
