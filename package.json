@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "cd by_figma && npm install && npm run build",
-    "start": "cd server && npm start",
+    "start": "cd server && npm install && npm start",
     "migrate": "cd server && npm run migrate"
   }
 }
