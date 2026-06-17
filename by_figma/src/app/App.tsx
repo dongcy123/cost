@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
-import { Camera, Pencil } from "lucide-react";
+import {
+  Camera,
+  Pencil,
+  Plus,
+  Home,
+  PieChart,
+  Wallet,
+  Ellipsis,
+} from "lucide-react";
 import { MainDashboard } from "./components/MainDashboard";
+import { StatsView } from "./components/StatsView";
 import { UploadOverlay } from "./components/UploadOverlay";
 import { OKRDrawer } from "./components/OKRDrawer";
 import { TransactionEditCard } from "./components/TransactionEditCard";
@@ -19,6 +28,7 @@ import {
   updateBudget,
   parseReceipt,
   parseReceipts,
+  dedupeTransactions,
   getAuthToken,
   verifyToken,
   clearAuthToken,
@@ -60,6 +70,7 @@ export default function App() {
   const [showOKRDrawer, setShowOKRDrawer] = useState(false);
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [previousTransactions, setPreviousTransactions] = useState<Transaction[]>([]);
   const [budget, setBudget] = useState<Budget | null>(null);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
 
@@ -70,9 +81,16 @@ export default function App() {
   const [batchResults, setBatchResults] = useState<ParsedReceiptDTO[]>([]);
   const [batchErrors, setBatchErrors] = useState<string[]>([]);
   const [showBatchReview, setShowBatchReview] = useState(false);
+  const [isBatchSaving, setIsBatchSaving] = useState(false);
 
   // ── Manual entry state ──
   const [showManualEntry, setShowManualEntry] = useState(false);
+
+  // ── View routing ──
+  const [currentView, setCurrentView] = useState<"home" | "stats">("home");
+
+  // ── FAB menu ──
+  const [showFabMenu, setShowFabMenu] = useState(false);
 
   // ── Data loading ──
 
@@ -80,11 +98,18 @@ export default function App() {
     setIsLoading(true);
     setLoadError("");
     try {
-      const [txns, bgt] = await Promise.all([
+      // Compute previous month for comparison data
+      const [year, monthNum] = month.split("-").map(Number);
+      const prevDate = new Date(year, monthNum - 2, 1);
+      const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+
+      const [txns, prevTxns, bgt] = await Promise.all([
         fetchTransactions(month),
+        fetchTransactions(prevMonth),
         fetchBudget(month),
       ]);
       setTransactions(txns);
+      setPreviousTransactions(prevTxns);
       setBudget(bgt);
     } catch {
       setLoadError("数据加载失败，请检查网络后重试");
@@ -179,6 +204,12 @@ export default function App() {
   };
 
   const handleBatchSave = async (items: ParsedReceiptDTO[]) => {
+    // Close modal immediately, show saving indicator
+    setShowBatchReview(false);
+    setBatchResults([]);
+    setBatchErrors([]);
+    setIsBatchSaving(true);
+
     try {
       for (const item of items) {
         const saved = await createTransaction({
@@ -190,11 +221,10 @@ export default function App() {
         });
         setTransactions((prev) => [saved, ...prev]);
       }
-      setShowBatchReview(false);
-      setBatchResults([]);
-      setBatchErrors([]);
     } catch {
       setLoadError("批量保存失败");
+    } finally {
+      setIsBatchSaving(false);
     }
   };
 
@@ -266,6 +296,24 @@ export default function App() {
     }
   };
 
+  // ── Dedupe toast state ──
+  const [dedupeToast, setDedupeToast] = useState("");
+
+  // ── Dedupe ──
+
+  const handleDedupe = async () => {
+    try {
+      const result = await dedupeTransactions();
+      if (result.deleted > 0) {
+        await loadData(selectedMonth);
+      }
+      setDedupeToast(`去重完成，已删除 ${result.deleted} 条重复记录`);
+      setTimeout(() => setDedupeToast(""), 3000);
+    } catch {
+      setLoadError("去重失败，请重试");
+    }
+  };
+
   // ── Helpers ──
 
   const dismissError = () => setLoadError("");
@@ -301,6 +349,13 @@ export default function App() {
         </div>
       )}
 
+      {/* Dedupe Toast */}
+      {dedupeToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-black dark:bg-white text-white dark:text-black px-6 py-3 text-sm z-50">
+          {dedupeToast}
+        </div>
+      )}
+
       {/* Error Toast */}
       {(loadError || uploadError) && (
         <button
@@ -313,47 +368,142 @@ export default function App() {
 
       {/* Main Content */}
       <div className="relative z-10">
-        <MainDashboard
-          selectedMonth={selectedMonth}
-          setSelectedMonth={setSelectedMonth}
-          transactions={transactions}
-          onDeleteTransaction={handleDeleteTransaction}
-          onEditTransaction={handleEditTransaction}
-          onShowOKR={() => setShowOKRDrawer(true)}
-          budget={budget}
-          isLoading={isLoading}
-          error={loadError}
-          onRetry={() => loadData(selectedMonth)}
-        />
+        {currentView === "home" ? (
+          <MainDashboard
+            selectedMonth={selectedMonth}
+            setSelectedMonth={setSelectedMonth}
+            transactions={transactions}
+            onDeleteTransaction={handleDeleteTransaction}
+            onEditTransaction={handleEditTransaction}
+            onShowCharts={() => setCurrentView("stats")}
+            onShowOKR={() => setShowOKRDrawer(true)}
+            onDedupe={handleDedupe}
+            budget={budget}
+            isLoading={isLoading}
+            isBatchSaving={isBatchSaving}
+            error={loadError}
+            onRetry={() => loadData(selectedMonth)}
+          />
+        ) : (
+          <StatsView
+            transactions={[...transactions, ...previousTransactions]}
+            selectedMonth={selectedMonth}
+            budget={budget}
+            onBack={() => setCurrentView("home")}
+          />
+        )}
       </div>
 
-      {/* FAB */}
-      {!isUploading && !showBatchReview && !showManualEntry && (
-        <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-40">
-          <button
-            onClick={() => setShowManualEntry(true)}
-            className="w-14 h-14 bg-white dark:bg-black border border-black/20 dark:border-white/20 flex items-center justify-center"
-          >
-            <Pencil className="w-5 h-5 text-black dark:text-white" />
-          </button>
+      {/* ═══ Bottom Navigation Bar + FAB ═══ */}
+      {!showBatchReview && !showManualEntry && (
+        <>
+          {/* FAB Menu Overlay */}
+          {showFabMenu && (
+            <>
+              <div
+                className="fixed inset-0 bg-black/20 z-40 transition-opacity"
+                onClick={() => setShowFabMenu(false)}
+              />
+              <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2" style={{ animation: "fabMenuIn 0.2s ease-out" }}>
+                {/* Camera Upload */}
+                <label className="flex items-center gap-3 bg-white rounded-2xl px-5 py-3.5 shadow-lg cursor-pointer active:bg-[#F7F8FA] transition-colors">
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] flex items-center justify-center">
+                    <Camera className="w-4.5 h-4.5 text-white" />
+                  </div>
+                  <span className="text-sm font-medium text-[#1A1A1A]">拍照录入</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      setShowFabMenu(false);
+                      handleFileSelect(e);
+                    }}
+                  />
+                </label>
+                {/* Manual Entry */}
+                <button
+                  className="flex items-center gap-3 bg-white rounded-2xl px-5 py-3.5 shadow-lg active:bg-[#F7F8FA] transition-colors"
+                  onClick={() => {
+                    setShowFabMenu(false);
+                    setShowManualEntry(true);
+                  }}
+                >
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] flex items-center justify-center">
+                    <Pencil className="w-4.5 h-4.5 text-white" />
+                  </div>
+                  <span className="text-sm font-medium text-[#1A1A1A]">手动录入</span>
+                </button>
+              </div>
+            </>
+          )}
 
-          <label className="w-14 h-14 bg-black dark:bg-white flex items-center justify-center cursor-pointer">
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={handleFileSelect}
-            />
-            <Camera className="w-6 h-6 text-white dark:text-black" />
-          </label>
-        </div>
+          {/* Bottom Nav Bar */}
+          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#F2F2F7] z-30 pb-1">
+            <div className="flex items-end justify-around px-2 pt-2 pb-1 relative max-w-lg mx-auto">
+              {/* Home */}
+              <button
+                className="flex flex-col items-center gap-0.5 py-1 px-3"
+                onClick={() => setCurrentView("home")}
+              >
+                <Home className={`w-5 h-5 ${currentView === "home" ? "text-[#1A1A1A]" : "text-[#8E8E93]"}`} />
+                <span className={`text-[10px] ${currentView === "home" ? "text-[#1A1A1A] font-medium" : "text-[#8E8E93]"}`}>首页</span>
+              </button>
+
+              {/* Charts */}
+              <button
+                className="flex flex-col items-center gap-0.5 py-1 px-3"
+                onClick={() => setCurrentView("stats")}
+              >
+                <PieChart className={`w-5 h-5 ${currentView === "stats" ? "text-[#1A1A1A]" : "text-[#8E8E93]"}`} />
+                <span className={`text-[10px] ${currentView === "stats" ? "text-[#1A1A1A] font-medium" : "text-[#8E8E93]"}`}>统计</span>
+              </button>
+
+              {/* FAB */}
+              <div className="relative -mt-3">
+                <button
+                  onClick={() => setShowFabMenu(!showFabMenu)}
+                  className={`w-14 h-14 rounded-full flex items-center justify-center shadow-[0_4px_16px_rgba(244,208,63,0.4)] transition-all active:scale-95 ${
+                    showFabMenu
+                      ? "bg-[#1A1A1A] rotate-45"
+                      : "bg-[#F4D03F]"
+                  }`}
+                >
+                  <Plus className={`w-7 h-7 transition-colors ${
+                    showFabMenu ? "text-white" : "text-[#1A1A1A]"
+                  }`} />
+                </button>
+              </div>
+
+              {/* Budget */}
+              <button
+                className="flex flex-col items-center gap-0.5 py-1 px-3"
+                onClick={() => setShowOKRDrawer(true)}
+              >
+                <Wallet className="w-5 h-5 text-[#8E8E93]" />
+                <span className="text-[10px] text-[#8E8E93]">预算</span>
+              </button>
+
+              {/* More */}
+              <button
+                className="flex flex-col items-center gap-0.5 py-1 px-3"
+                onClick={handleDedupe}
+              >
+                <Ellipsis className="w-5 h-5 text-[#8E8E93]" />
+                <span className="text-[10px] text-[#8E8E93]">更多</span>
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Loading FAB */}
       {isUploading && (
-        <div className="fixed bottom-6 right-6 w-14 h-14 bg-black dark:bg-white flex items-center justify-center z-40">
-          <div className="w-6 h-6 border-2 border-white dark:border-black border-t-transparent dark:border-t-transparent rounded-full animate-spin" />
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40">
+          <div className="w-14 h-14 rounded-full bg-[#F4D03F] flex items-center justify-center shadow-[0_4px_16px_rgba(244,208,63,0.4)]">
+            <div className="w-6 h-6 border-2 border-[#1A1A1A] border-t-transparent rounded-full animate-spin" />
+          </div>
         </div>
       )}
 
@@ -394,6 +544,19 @@ export default function App() {
         onSave={handleSaveTransaction}
         onDelete={handleDeleteTransaction}
       />
+
+      <style>{`
+        @keyframes fabMenuIn {
+          from {
+            opacity: 0;
+            transform: translate(-50%, 12px);
+          }
+          to {
+            opacity: 1;
+            transform: translate(-50%, 0);
+          }
+        }
+      `}</style>
     </div>
   );
 }

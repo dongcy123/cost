@@ -4,9 +4,10 @@ import { ChevronDown } from 'lucide-react';
 interface MonthSelectorProps {
   selectedMonth: string;
   onSelect: (month: string) => void;
+  className?: string;
 }
 
-export function MonthSelector({ selectedMonth, onSelect }: MonthSelectorProps) {
+export function MonthSelector({ selectedMonth, onSelect, className }: MonthSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -41,7 +42,7 @@ export function MonthSelector({ selectedMonth, onSelect }: MonthSelectorProps) {
   return (
     <div className="relative" ref={dropdownRef}>
       <button
-        className="text-sm text-[#8E8E93] flex items-center gap-1"
+        className={`text-sm flex items-center gap-1 ${className || "text-[#8E8E93]"}`}
         onClick={() => setIsOpen(!isOpen)}
       >
         {selectedMonth}

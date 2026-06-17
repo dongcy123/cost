@@ -24,6 +24,11 @@ Server runs on port 3001 (or `PORT` env). In production mode it serves both `/ap
 
 - `import.meta.dirname` is `undefined` with tsx. Use `path.dirname(fileURLToPath(import.meta.url))` instead.
 
+## Workflow
+
+- **Local-first**: modify code locally, build, run the project, and let the user verify in browser before committing to git or triggering Render redeploy.
+- Never `git commit` or `git push` until the user explicitly approves the changes.
+
 ## gstack
 
 - Use the `/browse` skill from gstack for all web browsing.

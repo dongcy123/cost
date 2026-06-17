@@ -1,17 +1,27 @@
 import { useState, useMemo } from "react";
-import { Terminal } from "lucide-react";
-import { MonthSelector } from "./MonthSelector";
 import {
-  LineChart,
-  Line,
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  XAxis,
-  YAxis,
-  Tooltip,
-} from "recharts";
+  Terminal,
+  UtensilsCrossed,
+  Car,
+  ShoppingBag,
+  Gamepad2,
+  Home,
+  Heart,
+  BookOpen,
+  Phone,
+  HelpCircle,
+  ReceiptText,
+  Target,
+  Briefcase,
+  DollarSign,
+  Ellipsis,
+  TrendingDown,
+  TrendingUp,
+  Wallet,
+} from "lucide-react";
+import { MonthSelector } from "./MonthSelector";
+
+// ── Types ──
 
 interface Transaction {
   id: number;
@@ -36,22 +46,59 @@ interface MainDashboardProps {
   onEditTransaction: (transaction: Transaction) => void;
   onShowCharts: () => void;
   onShowOKR: () => void;
+  onDedupe?: () => void;
   budget: Budget | null;
   isLoading: boolean;
+  isBatchSaving?: boolean;
   error: string;
   onRetry: () => void;
 }
 
-const CHART_COLORS = [
-  "#000000",
-  "#333333",
-  "#666666",
-  "#999999",
-  "#BBBBBB",
-  "#CCCCCC",
-  "#DDDDDD",
-  "#EEEEEE",
+// ── Constants ──
+
+const CATEGORY_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  "餐饮": UtensilsCrossed,
+  "交通": Car,
+  "购物": ShoppingBag,
+  "娱乐": Gamepad2,
+  "住房": Home,
+  "医疗": Heart,
+  "教育": BookOpen,
+  "通讯": Phone,
+};
+
+const QUICK_ACTIONS = [
+  { icon: ReceiptText, label: "账单" },
+  { icon: Target, label: "预算" },
+  { icon: Briefcase, label: "资产" },
+  { icon: DollarSign, label: "返现" },
+  { icon: Ellipsis, label: "更多" },
 ];
+
+const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+const FILTER_OPTIONS = [
+  { key: "all", label: "全部" },
+  { key: "income", label: "收入" },
+  { key: "expense", label: "支出" },
+] as const;
+
+// ── Helpers ──
+
+function getCategoryIcon(category: string) {
+  const Icon = CATEGORY_ICON_MAP[category] || HelpCircle;
+  return Icon;
+}
+
+function formatDateToChinese(dateStr: string): string {
+  const d = new Date(dateStr);
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const weekday = WEEKDAYS[d.getDay()];
+  return `${month}月${day}日 ${weekday}`;
+}
+
+// ── Component ──
 
 export function MainDashboard({
   selectedMonth,
@@ -59,12 +106,16 @@ export function MainDashboard({
   transactions,
   onEditTransaction,
   onShowOKR,
+  onDedupe,
   budget,
   isLoading,
+  isBatchSaving,
   error,
   onRetry,
 }: MainDashboardProps) {
-  const [chartTab, setChartTab] = useState<"trend" | "structure">("trend");
+  const [txnFilter, setTxnFilter] = useState<"all" | "income" | "expense">("all");
+
+  // ── Computations (unchanged core logic) ──
 
   const currentTotal = useMemo(() => {
     return transactions
@@ -98,14 +149,16 @@ export function MainDashboard({
 
   const auditMessage = useMemo(() => {
     if (monthlyBudget === 0) {
-      return '[提示] 尚未设置预算，点击右上角 ⚙️ 规则 设置月度预算';
+      return "尚未设置预算，点击右上角 ⚙️ 规则 设置月度预算";
     }
     if (budgetDeviation > 10) {
-      return `[警告] 本月支出已超预算 ${budgetDeviation.toFixed(1)}%，建议控制餐饮和购物类支出`;
+      return `本月支出已超预算 ${budgetDeviation.toFixed(1)}%，建议控制餐饮和购物类支出`;
     } else if (budgetDeviation > 0) {
-      return `[提示] 本月支出超预算 ${budgetDeviation.toFixed(1)}%，请注意控制`;
+      return `本月支出超预算 ${budgetDeviation.toFixed(1)}%，请注意控制`;
     } else {
-      return `[正常] 预算执行良好，当前进度 ${monthlyBudget > 0 ? (currentTotal / monthlyBudget * 100).toFixed(1) : "0.0"}%`;
+      return `预算执行良好，当前进度 ${
+        monthlyBudget > 0 ? ((currentTotal / monthlyBudget) * 100).toFixed(1) : "0.0"
+      }%`;
     }
   }, [budgetDeviation, currentTotal, monthlyBudget]);
 
@@ -113,55 +166,65 @@ export function MainDashboard({
     return transactions.filter((t) => t.month === selectedMonth);
   }, [transactions, selectedMonth]);
 
-  // ── Chart data ──
+  // Type-filtered transactions for the list
+  const displayedTransactions = useMemo(() => {
+    if (txnFilter === "all") return filteredTransactions;
+    if (txnFilter === "income") return []; // No income type yet
+    return filteredTransactions; // All are expenses for now
+  }, [filteredTransactions, txnFilter]);
 
-  const trendData = useMemo(() => {
-    const dailyTotals = new Map<string, number>();
-    transactions
-      .filter((t) => t.month === selectedMonth)
-      .forEach((t) => {
-        const day = t.date.slice(0, 10);
-        dailyTotals.set(day, (dailyTotals.get(day) || 0) + Number(t.amount));
-      });
+  const dateGroups = useMemo(() => {
+    const groups: Map<string, Transaction[]> = new Map();
+    for (const t of displayedTransactions) {
+      const day = t.date.slice(0, 10);
+      if (!groups.has(day)) groups.set(day, []);
+      groups.get(day)!.push(t);
+    }
+    return Array.from(groups.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [displayedTransactions]);
 
-    return Array.from(dailyTotals.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, amount]) => ({
-        date: date.slice(5),
-        amount: parseFloat(amount.toFixed(2)),
-      }));
-  }, [transactions, selectedMonth]);
-
-  const structureData = useMemo(() => {
-    const categoryTotals = new Map<string, number>();
-    transactions
-      .filter((t) => t.month === selectedMonth)
-      .forEach((t) => {
-        categoryTotals.set(t.category, (categoryTotals.get(t.category) || 0) + Number(t.amount));
-      });
-
-    return Array.from(categoryTotals.entries())
-      .map(([category, amount]) => ({ category, amount: parseFloat(amount.toFixed(2)) }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [transactions, selectedMonth]);
-
-  const maxCategory = structureData[0]?.category;
+  // Daily summary for each date group
+  const dateSummaries = useMemo(() => {
+    const map = new Map<string, { income: number; expense: number }>();
+    for (const t of displayedTransactions) {
+      const day = t.date.slice(0, 10);
+      if (!map.has(day)) map.set(day, { income: 0, expense: 0 });
+      const s = map.get(day)!;
+      // All current transactions are expenses
+      s.expense += Number(t.amount);
+    }
+    return map;
+  }, [displayedTransactions]);
 
   // ── Loading skeleton ──
 
   if (isLoading) {
     return (
-      <div className="w-full min-h-screen">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-black/10 dark:border-white/10">
-          <div className="h-5 w-20 bg-[#F2F2F7] dark:bg-[#1C1C1E] animate-pulse" />
-          <div className="h-5 w-10 bg-[#F2F2F7] dark:bg-[#1C1C1E] animate-pulse" />
+      <div className="w-full min-h-screen bg-[#F7F8FA]">
+        <div className="bg-gradient-to-b from-[#F4D03F] to-[#F7D94E] pt-4 pb-16 rounded-b-[2.5rem]">
+          <div className="flex items-center justify-between px-6">
+            <div className="h-5 w-20 bg-white/40 animate-pulse rounded" />
+            <div className="h-5 w-14 bg-white/40 animate-pulse rounded" />
+          </div>
         </div>
-        <div className="px-6 py-12 text-center">
-          <div className="h-10 w-32 bg-[#F2F2F7] dark:bg-[#1C1C1E] animate-pulse mx-auto mb-4" />
-          <div className="h-4 w-16 bg-[#F2F2F7] dark:bg-[#1C1C1E] animate-pulse mx-auto" />
+        <div className="px-4 -mt-12 relative z-10">
+          <div className="bg-white rounded-2xl shadow-sm p-6">
+            <div className="h-4 w-16 bg-[#F2F2F7] animate-pulse mb-3 rounded" />
+            <div className="h-8 w-32 bg-[#F2F2F7] animate-pulse mb-3 rounded" />
+            <div className="h-3 w-20 bg-[#F2F2F7] animate-pulse rounded" />
+          </div>
         </div>
-        <div className="mx-6 mb-6 h-12 bg-[#F2F2F7] dark:bg-[#1C1C1E] animate-pulse" />
-        <div className="mx-6 mb-6 h-64 bg-[#F2F2F7] dark:bg-[#1C1C1E] animate-pulse" />
+        <div className="px-6 mt-6">
+          <div className="flex justify-between">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex flex-col items-center gap-2">
+                <div className="w-12 h-12 rounded-2xl bg-[#F2F2F7] animate-pulse" />
+                <div className="h-3 w-8 bg-[#F2F2F7] animate-pulse rounded" />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mx-4 mt-6 h-64 bg-white rounded-2xl animate-pulse" />
       </div>
     );
   }
@@ -170,18 +233,31 @@ export function MainDashboard({
 
   if (error && transactions.length === 0) {
     return (
-      <div className="w-full min-h-screen">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-black/10 dark:border-white/10">
-          <MonthSelector selectedMonth={selectedMonth} onSelect={setSelectedMonth} />
-          <button className="text-sm text-[#8E8E93]" onClick={onShowOKR}>
-            ⚙️ 规则
-          </button>
+      <div className="w-full min-h-screen bg-[#F7F8FA]">
+        <div className="bg-gradient-to-b from-[#F4D03F] to-[#F7D94E] pt-4 pb-16 rounded-b-[2.5rem]">
+          <div className="flex items-center justify-between px-6">
+            <MonthSelector
+              selectedMonth={selectedMonth}
+              onSelect={setSelectedMonth}
+              className="text-[#1A1A1A]/70"
+            />
+            <div className="flex items-center gap-3">
+              {onDedupe && (
+                <button className="text-sm text-[#1A1A1A]/60" onClick={onDedupe}>
+                  去重
+                </button>
+              )}
+              <button className="text-sm text-[#1A1A1A]/60" onClick={onShowOKR}>
+                ⚙️ 规则
+              </button>
+            </div>
+          </div>
         </div>
         <div className="px-6 py-20 text-center">
           <div className="text-[#8E8E93] text-sm mb-4">{error}</div>
           <button
             onClick={onRetry}
-            className="border border-black dark:border-white px-6 py-2 text-sm hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black transition-colors"
+            className="bg-[#F4D03F] text-[#1A1A1A] px-8 py-3 rounded-xl text-sm font-medium hover:bg-[#E8C439] transition-colors"
           >
             重试
           </button>
@@ -190,210 +266,219 @@ export function MainDashboard({
     );
   }
 
-  // ── Main ──
+  // ── Main Render ──
 
   return (
-    <div className="w-full min-h-screen">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-black/10 dark:border-white/10">
-        <MonthSelector selectedMonth={selectedMonth} onSelect={setSelectedMonth} />
-        <button className="text-sm text-[#8E8E93]" onClick={onShowOKR}>
-          ⚙️ 规则
-        </button>
-      </div>
-
-      {/* Core Number */}
-      <div className="px-6 py-8 text-center">
-        <div className="font-mono text-4xl font-bold mb-1">
-          {currentTotal.toFixed(2)}
-        </div>
-        <div
-          className={`text-xs font-mono ${percentageChange >= 0 ? "text-[#FF3B30]" : "text-[#8E8E93]"}`}
-        >
-          {percentageChange >= 0 ? "↑" : "↓"}{" "}
-          {Math.abs(percentageChange).toFixed(1)}%
-        </div>
-      </div>
-
-      {/* Audit Console */}
-      <div className="mx-6 mb-4 bg-[#F2F2F7] dark:bg-[#1C1C1E] px-4 py-3 flex items-start gap-3">
-        <Terminal className="w-4 h-4 text-[#8E8E93] mt-0.5 flex-shrink-0" />
-        <div className="text-sm text-[#8E8E93] flex-1">{auditMessage}</div>
-      </div>
-
-      {/* Chart Card */}
-      <div className="mx-6 mb-6">
-        <div className="bg-[#F2F2F7] dark:bg-[#1C1C1E]">
-          {/* Chart Tabs */}
-          <div className="flex border-b border-black/10 dark:border-white/10 px-4">
-            <button
-              onClick={() => setChartTab("trend")}
-              className={`py-3 text-sm relative mr-8 ${
-                chartTab === "trend" ? "font-medium" : "text-[#8E8E93]"
-              }`}
-            >
-              趋势
-              {chartTab === "trend" && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black dark:bg-white" />
-              )}
-            </button>
-            <button
-              onClick={() => setChartTab("structure")}
-              className={`py-3 text-sm relative ${
-                chartTab === "structure" ? "font-medium" : "text-[#8E8E93]"
-              }`}
-            >
-              结构
-              {chartTab === "structure" && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black dark:bg-white" />
-              )}
-            </button>
-          </div>
-
-          {/* Chart Content — fixed height card */}
-          <div className="h-72 relative">
-            {chartTab === "trend" ? (
-              trendData.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-sm text-[#8E8E93]">
-                  暂无数据
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={trendData} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
-                    <XAxis
-                      dataKey="date"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fontSize: 11, fill: "#8E8E93" }}
-                    />
-                    <YAxis
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fontSize: 11, fill: "#8E8E93" }}
-                      width={40}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#000",
-                        border: "none",
-                        borderRadius: 0,
-                        color: "#fff",
-                        fontSize: 12,
-                      }}
-                      formatter={(value: number) => [`${value.toFixed(2)}`, "支出"]}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="amount"
-                      stroke="#000000"
-                      strokeWidth={1.5}
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              )
-            ) : structureData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-sm text-[#8E8E93]">
-                暂无数据
-              </div>
-            ) : (
-              <div className="flex h-full">
-                <div className="flex-1 flex items-center justify-center">
-                  <ResponsiveContainer width="100%" height="90%">
-                    <PieChart>
-                      <Pie
-                        data={structureData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={45}
-                        outerRadius={75}
-                        paddingAngle={2}
-                        dataKey="amount"
-                      >
-                        {structureData.map((entry, index) => (
-                          <Cell
-                            key={`cell-${index}`}
-                            fill={
-                              entry.category === maxCategory
-                                ? "#FF3B30"
-                                : CHART_COLORS[index % CHART_COLORS.length]
-                            }
-                            stroke="none"
-                          />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "#000",
-                          border: "none",
-                          borderRadius: 0,
-                          color: "#fff",
-                          fontSize: 12,
-                        }}
-                        formatter={(value: number) => `${value.toFixed(2)}`}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-
-                {/* Legend */}
-                <div className="w-28 flex flex-col justify-center gap-1 pr-4 text-xs">
-                  {structureData.map((item, index) => (
-                    <div key={item.category} className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <div
-                          className="w-2 h-2 flex-shrink-0"
-                          style={{
-                            backgroundColor:
-                              item.category === maxCategory
-                                ? "#FF3B30"
-                                : CHART_COLORS[index % CHART_COLORS.length],
-                          }}
-                        />
-                        <span className="truncate max-w-12">{item.category}</span>
-                      </div>
-                      <span className="font-mono tabular-nums">{item.amount.toFixed(0)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+    <div className="w-full min-h-screen bg-[#F7F8FA]">
+      {/* ═══ Yellow Header ═══ */}
+      <div className="bg-gradient-to-b from-[#F4D03F] to-[#F7D94E] pt-4 pb-16 rounded-b-[2.5rem]">
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-6">
+          <MonthSelector selectedMonth={selectedMonth} onSelect={setSelectedMonth} />
+          <div className="flex items-center gap-3">
+            {onDedupe && (
+              <button
+                className="text-sm text-[#1A1A1A]/60 hover:text-[#1A1A1A] transition-colors"
+                onClick={onDedupe}
+              >
+                去重
+              </button>
             )}
+            <button
+              className="text-sm text-[#1A1A1A]/60 hover:text-[#1A1A1A] transition-colors"
+              onClick={onShowOKR}
+            >
+              ⚙️ 规则
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Transaction List / Empty */}
-      {filteredTransactions.length === 0 ? (
-        <div className="px-6 py-16 text-center">
-          <div className="text-sm text-[#8E8E93]">暂无记录</div>
-          <div className="text-xs text-[#8E8E93] mt-1">
-            点击右下角按钮拍摄你的第一张小票
+      {/* ═══ Overview Card (floating over header) ═══ */}
+      <div className="px-4 -mt-12 relative z-10">
+        <div className="bg-white rounded-2xl shadow-[0_4px_20px_rgba(0,0,0,0.04)] p-6">
+          {/* Total Expense */}
+          <div className="text-sm text-[#8E8E93] mb-1 font-medium">
+            总支出
           </div>
-        </div>
-      ) : (
-        <div className="pb-20">
-          {filteredTransactions.map((transaction) => (
-            <div
-              key={transaction.id}
-              className="h-14 px-6 flex items-center justify-between border-b border-black/5 dark:border-white/5 cursor-pointer hover:bg-[#F2F2F7] dark:hover:bg-[#1C1C1E] transition-colors"
-              onClick={() => onEditTransaction(transaction)}
-            >
-              <div className="flex flex-col">
-                <div className="text-sm">{transaction.category}</div>
-                <div className="text-xs text-[#8E8E93]">{transaction.merchant}</div>
+          <div className="text-[2rem] font-bold text-[#1A1A1A] leading-tight mb-1 tracking-tight">
+            {currentTotal.toFixed(2)}
+          </div>
+
+          {/* Month-over-month change */}
+          <div className="flex items-center gap-1.5 mb-5">
+            {percentageChange !== 0 && (
+              <span
+                className={`text-xs font-medium ${
+                  percentageChange > 0 ? "text-[#E8A030]" : "text-[#34C759]"
+                }`}
+              >
+                {percentageChange > 0 ? (
+                  <TrendingUp className="w-3.5 h-3.5 inline" />
+                ) : (
+                  <TrendingDown className="w-3.5 h-3.5 inline" />
+                )}{" "}
+                {Math.abs(percentageChange).toFixed(1)}%
+              </span>
+            )}
+            <span className="text-xs text-[#8E8E93]">较上月</span>
+          </div>
+
+          {/* Income / Balance sub-metrics */}
+          <div className="flex items-center gap-5 pt-4 border-t border-[#F2F2F7]">
+            <div className="flex-1">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Wallet className="w-3.5 h-3.5 text-[#8E8E93]" />
+                <span className="text-xs text-[#8E8E93]">收入</span>
               </div>
-              <div className="flex flex-col items-end">
-                <div className="font-mono text-base">
-                  {Number(transaction.amount).toFixed(2)}
-                </div>
-                <div className="text-xs text-[#8E8E93]">
-                  {transaction.date.slice(5, 16)}
-                </div>
+              <div className="text-sm font-semibold text-[#1A1A1A]">
+                0.00
               </div>
             </div>
+            <div className="w-px h-8 bg-[#F2F2F7]" />
+            <div className="flex-1">
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="text-xs text-[#8E8E93]">余额</span>
+              </div>
+              <div className="text-sm font-semibold text-[#1A1A1A]">
+                {monthlyBudget > 0
+                  ? (monthlyBudget - currentTotal).toFixed(2)
+                  : (-currentTotal).toFixed(2)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ Quick Actions ═══ */}
+      <div className="px-6 mt-6">
+        <div className="flex justify-between">
+          {QUICK_ACTIONS.map((action) => (
+            <button
+              key={action.label}
+              className="flex flex-col items-center gap-1.5 group"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-white shadow-[0_2px_8px_rgba(0,0,0,0.03)] flex items-center justify-center group-active:scale-95 transition-transform">
+                <action.icon className="w-5 h-5 text-[#1A1A1A]" />
+              </div>
+              <span className="text-[11px] text-[#8E8E93]">{action.label}</span>
+            </button>
           ))}
         </div>
-      )}
+      </div>
+
+      {/* ═══ Audit Message ═══ */}
+      <div className="mx-4 mt-5 bg-[#FFF9E6] border border-[#F4D03F]/20 rounded-xl px-4 py-3 flex items-start gap-3">
+        <Terminal className="w-4 h-4 text-[#F4D03F] mt-0.5 flex-shrink-0" />
+        <div className="text-sm text-[#8E8E93] flex-1 leading-relaxed">{auditMessage}</div>
+      </div>
+
+      {/* ═══ Transaction Filters ═══ */}
+      <div className="px-4 mt-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold text-[#1A1A1A]">交易记录</h3>
+        </div>
+        <div className="flex gap-2">
+          {FILTER_OPTIONS.map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => setTxnFilter(opt.key)}
+              className={`px-5 py-2 text-sm rounded-full font-medium transition-all ${
+                txnFilter === opt.key
+                  ? "bg-[#1A1A1A] text-white shadow-sm"
+                  : "bg-white text-[#8E8E93] shadow-[0_1px_3px_rgba(0,0,0,0.03)] hover:text-[#1A1A1A]"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ═══ Transaction List ═══ */}
+      <div className="px-4 mt-4 pb-28">
+        {filteredTransactions.length === 0 && !isBatchSaving ? (
+          <div className="py-16 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#F2F2F7] flex items-center justify-center">
+              <ReceiptText className="w-7 h-7 text-[#8E8E93]" />
+            </div>
+            <div className="text-sm text-[#8E8E93]">暂无记录</div>
+            <div className="text-xs text-[#8E8E93] mt-1">
+              点击下方 + 按钮拍摄你的第一张小票
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Batch saving indicator */}
+            {isBatchSaving && (
+              <div className="mb-4 bg-white rounded-2xl shadow-sm px-4 py-3 flex items-center gap-3">
+                <div className="w-4 h-4 border-2 border-[#F4D03F] border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-[#8E8E93]">录入中...</span>
+              </div>
+            )}
+
+            {dateGroups.map(([date, txnGroup]) => {
+              const summary = dateSummaries.get(date);
+              const formattedDate = formatDateToChinese(date);
+
+              return (
+                <div key={date} className="mb-4">
+                  {/* Date header */}
+                  <div className="flex items-center justify-between py-2 px-1">
+                    <span className="text-sm font-medium text-[#1A1A1A]">
+                      {formattedDate}
+                    </span>
+                    <span className="text-xs text-[#8E8E93]">
+                      支出 {summary?.expense.toFixed(2) || "0.00"}
+                    </span>
+                  </div>
+
+                  {/* Transaction cards for this date */}
+                  <div className="bg-white rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.03)] overflow-hidden">
+                    {txnGroup.map((transaction, idx) => {
+                      const Icon = getCategoryIcon(transaction.category);
+                      return (
+                        <div
+                          key={transaction.id}
+                          className={`flex items-center px-4 py-3 cursor-pointer active:bg-[#F7F8FA] transition-colors ${
+                            idx < txnGroup.length - 1 ? "border-b border-[#F7F8FA]" : ""
+                          }`}
+                          onClick={() => onEditTransaction(transaction)}
+                        >
+                          {/* Category Icon */}
+                          <div className="w-10 h-10 rounded-full bg-[#F7F8FA] flex items-center justify-center mr-3 flex-shrink-0">
+                            <Icon className="w-4.5 h-4.5 text-[#1A1A1A]" />
+                          </div>
+
+                          {/* Category + Merchant */}
+                          <div className="flex-1 min-w-0 mr-3">
+                            <div className="text-sm font-medium text-[#1A1A1A] truncate">
+                              {transaction.category}
+                            </div>
+                            <div className="text-xs text-[#8E8E93] truncate">
+                              {transaction.merchant || transaction.date.slice(11, 16)}
+                            </div>
+                          </div>
+
+                          {/* Amount */}
+                          <div className="text-right flex-shrink-0">
+                            <div className="text-sm font-bold text-[#1A1A1A] tabular-nums">
+                              -{Number(transaction.amount).toFixed(2)}
+                            </div>
+                            <div className="text-[10px] text-[#8E8E93]">
+                              {transaction.date.slice(11, 16)}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
     </div>
   );
 }
