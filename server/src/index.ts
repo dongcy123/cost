@@ -42,9 +42,9 @@ app.use("/api", (req, res, next) => {
 // API Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
+app.use("/api/transactions/parse-receipt", parseReceiptRoutes); // more specific first
 app.use("/api/transactions", transactionRoutes);
 app.use("/api/budget", budgetRoutes);
-app.use("/api/transactions/parse-receipt", parseReceiptRoutes);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });

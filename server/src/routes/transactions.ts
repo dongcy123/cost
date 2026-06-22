@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, transactions } from "../db";
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 const router = Router();
@@ -101,6 +101,41 @@ router.delete("/:id", async (req, res) => {
   } catch (err) {
     console.error("DELETE /transactions error:", err);
     res.status(500).json({ error: "删除交易记录失败" });
+  }
+});
+
+// POST /api/transactions/dedupe — remove duplicates (same date + amount + time + merchant)
+router.post("/dedupe", async (_req, res) => {
+  try {
+    const all = await db
+      .select()
+      .from(transactions)
+      .orderBy(asc(transactions.id));
+
+    const seen = new Map<string, number>();
+    const dupIds: number[] = [];
+
+    for (const t of all) {
+      const d = new Date(t.date);
+      const day = d.toISOString().slice(0, 10); // YYYY-MM-DD
+      const time = d.toISOString().slice(11, 16); // HH:mm
+      const key = `${day}|${t.amount}|${time}|${t.merchant}`;
+
+      if (seen.has(key)) {
+        dupIds.push(t.id);
+      } else {
+        seen.set(key, t.id);
+      }
+    }
+
+    if (dupIds.length > 0) {
+      await db.delete(transactions).where(inArray(transactions.id, dupIds));
+    }
+
+    res.json({ deleted: dupIds.length });
+  } catch (err) {
+    console.error("POST /transactions/dedupe error:", err);
+    res.status(500).json({ error: "去重失败" });
   }
 });
 
